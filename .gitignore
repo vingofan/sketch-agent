@@ -1,0 +1,11 @@
+# 运行时产生的数据：草图是用户自己画的内容，不能进仓库
+sketches/
+*.log
+server.json
+
+# 本机的 Claude Code 配置（权限、个人设置）
+.claude/
+
+# 系统/编辑器
+.DS_Store
+node_modules/

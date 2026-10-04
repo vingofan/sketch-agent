@@ -1,0 +1,19 @@
+{
+  "name": "sketch-agent",
+  "displayName": "Sketch Agent",
+  "version": "0.3.0",
+  "description": "用数位板或鼠标在画板上画草图、打字，发给 Claude 并多轮对话。用 /sketch-agent:start 启动。",
+  "author": {
+    "name": "vingofan",
+    "url": "https://github.com/vingofan"
+  },
+  "keywords": [
+    "sketch",
+    "drawing-tablet",
+    "wacom",
+    "input"
+  ],
+  "homepage": "https://github.com/vingofan/sketch-agent",
+  "repository": "https://github.com/vingofan/sketch-agent",
+  "license": "MIT"
+}

@@ -1,0 +1,821 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Sketch Agent</title>
+<style>
+  :root {
+    --bg: #f6f5f2; --panel: #ffffff; --ink: #1f1f1f; --muted: #7a7872;
+    --line: #e2dfd8; --accent: #c4501b; --accent-ink: #fff; --user: #efece4;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#161616; --panel:#1f1f1f; --ink:#ece9e2; --muted:#8d8a83; --line:#33312e; --user:#2a2825; }
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--bg); color: var(--ink);
+    font: 15px/1.55 -apple-system, "PingFang SC", "Helvetica Neue", sans-serif;
+    display: grid; grid-template-columns: minmax(240px, 1.25fr) 12px minmax(240px, 1fr); gap: 0; padding: 12px;
+  }
+  .col { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+
+  /* 左栏：输入区 */
+  .toolbar { display: flex; gap: 6px; align-items: center; padding: 10px 12px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+  .toolbar .sp { flex: 1; }
+  button {
+    font: inherit; color: var(--ink); background: transparent; border: 1px solid var(--line);
+    border-radius: 8px; padding: 5px 11px; cursor: pointer;
+  }
+  button:hover { border-color: var(--muted); }
+  button.on { background: var(--ink); color: var(--panel); border-color: var(--ink); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  kbd { font: 11px ui-monospace, Menlo, monospace; color: var(--muted); margin-left: 4px; }
+  .size { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 13px; }
+  .size input { width: 80px; }
+
+  .canvas-wrap { flex: 1; min-height: 0; position: relative; background: #fff; }
+  canvas { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; cursor: crosshair; display: block; }
+  .hint { position: absolute; left: 14px; top: 12px; color: #b9b6ae; pointer-events: none; font-size: 14px; }
+
+  .composer { display: flex; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--line); align-items: flex-end; }
+  textarea {
+    flex: 1; resize: none; font: inherit; color: var(--ink); background: var(--bg);
+    border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; max-height: 120px; min-height: 40px; outline: none;
+  }
+  textarea:focus { border-color: var(--muted); }
+
+  /* 右栏：对话流 */
+  .chat-head { padding: 10px 14px; border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 8px; }
+  .chat-head b { font-weight: 600; }
+  .chat-head .sp { flex: 1; }
+  .status { color: var(--muted); font-size: 12px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .chat-head button, .chat-head .mode { flex: none; white-space: nowrap; }
+  #bSnap.on { background: #2f6b3a; border-color: #2f6b3a; color: #fff; }  /* 规整是开关，不是工具：用绿色和「当前工具」的黑色区分 */
+  #bSnap.on kbd { color: #cfe6d3; }
+  #log { flex: 1; overflow-y: auto; padding: 14px; display: flex; flex-direction: column; gap: 12px; }
+  .msg { max-width: 94%; white-space: pre-wrap; word-break: break-word; border-radius: 12px; padding: 9px 12px; }
+  .msg.user { align-self: flex-end; background: var(--user); }
+  .msg.agent { align-self: flex-start; padding-left: 2px; }
+  .msg.sys { align-self: center; color: var(--muted); font-size: 12px; padding: 0; }
+  .msg.err { align-self: flex-start; color: #b3261e; font-size: 13px; padding: 0 2px; }
+  .msg img { display: block; max-width: 100%; border-radius: 8px; border: 1px solid var(--line); background: #fff; margin-bottom: 6px; }
+  .tool { align-self: flex-start; color: var(--muted); font-size: 12px; padding: 0 2px; }
+  .cursor::after { content: "▍"; color: var(--accent); animation: blink 1s steps(2) infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+  .empty { margin: auto; color: var(--muted); text-align: center; font-size: 14px; line-height: 1.8; }
+  .empty .steps { display: inline-flex; flex-direction: column; gap: 6px; text-align: left; margin-bottom: 18px; }
+  .empty .steps i { display: inline-block; width: 20px; height: 20px; line-height: 20px; margin-right: 8px; border-radius: 50%; background: #e9e5da; color: #6b675c; font-style: normal; font-size: 12px; text-align: center; }
+  .empty .try { font-size: 13px; margin-bottom: 8px; }
+  .empty .chips { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
+  .empty .chips button { font: inherit; font-size: 13px; padding: 5px 12px; border-radius: 999px; border: 1px solid #d9d5ca; background: #fff; color: #4a473f; cursor: pointer; }
+  .empty .chips button:hover { background: #f3f0e8; }
+  .mode { font-size: 12px; color: var(--muted); padding: 1px 8px; border-radius: 999px; background: #eeebe3; }
+  .mode.on { color: #2f6b3a; background: #e3f0e4; }
+
+  /* 历史面板 */
+  .chat-body { flex: 1; min-height: 0; position: relative; display: flex; flex-direction: column; }
+  #hist { position: absolute; inset: 0; background: var(--panel); z-index: 5; overflow-y: auto; padding: 8px; }
+  #hist[hidden] { display: none; }
+  .hnote { color: var(--muted); font-size: 12px; padding: 4px 10px 10px; word-break: break-all; }
+  .hitem { display: block; width: 100%; text-align: left; padding: 9px 10px; border-radius: 10px; border: 1px solid transparent; margin-bottom: 4px; }
+  .hitem:hover { background: var(--bg); border-color: var(--line); }
+  .hitem.cur { border-color: var(--accent); }
+  .hitem .t { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .hitem .m { color: var(--muted); font-size: 12px; margin-top: 2px; }
+  .sid { font: 12px ui-monospace, Menlo, monospace; color: var(--muted); padding: 2px 8px; }
+
+  /* 分隔条：拖动调整画板 / Agent 大小 */
+  #split { position: relative; cursor: col-resize; touch-action: none; outline: none; }
+  #split::after {
+    content: ""; position: absolute; left: 50%; top: 50%; width: 4px; height: 44px;
+    transform: translate(-50%, -50%); border-radius: 2px; background: var(--line); transition: background .15s;
+  }
+  #split:hover::after, #split:focus-visible::after, #split.drag::after { background: var(--accent); }
+
+  @media (max-width: 860px) {
+    body { grid-template-columns: 1fr; grid-template-rows: minmax(160px, 1.2fr) 12px minmax(160px, 1fr); }
+    #split { cursor: row-resize; }
+    #split::after { width: 44px; height: 4px; }
+  }
+</style>
+</head>
+<body>
+
+<section class="col" id="left">
+  <div class="toolbar">
+    <button id="bPen" class="on" title="画笔 P：手绘，画完自动把不规则的圆、直线规整">画笔<kbd>P</kbd></button>
+    <button id="bLine" title="直线 L：按住拖动（Shift 锁定 45° 角）">直线<kbd>L</kbd></button>
+    <button id="bCircle" title="圆 O：从圆心按住拖出半径">圆<kbd>O</kbd></button>
+    <button id="bRect" title="矩形 R：按住拖动（Shift 画正方形）">矩形<kbd>R</kbd></button>
+    <button id="bArrow" title="箭头 A：按住拖动（Shift 锁定 45° 角）">箭头<kbd>A</kbd></button>
+    <button id="bEraser" title="橡皮 E">橡皮<kbd>E</kbd></button>
+    <button id="bSnap" class="on" title="自动规整 S：手绘的圆和直线画完后变规则。刚规整完按撤销可还原手绘，画的时候按住 Alt 可跳过一次">规整<kbd>S</kbd></button>
+    <span class="size">粗细 <input id="size" type="range" min="1" max="14" value="3"></span>
+    <button id="bUndo" title="撤销 ⌘Z">撤销<kbd>⌘Z</kbd></button>
+    <button id="bClear" title="清空 ⌘⌫">清空<kbd>⌘⌫</kbd></button>
+    <span class="sp"></span>
+    <button id="bFull" title="全屏 F"><span id="fullLbl">全屏</span><kbd>F</kbd></button>
+  </div>
+  <div class="canvas-wrap" id="wrap">
+    <canvas id="cv"></canvas>
+    <div class="hint" id="hint">在这里画，也可以只打字</div>
+  </div>
+  <div class="composer">
+    <textarea id="text" rows="1" placeholder="补充文字（可留空，只发草图）"></textarea>
+    <button id="bSend" class="primary">发送<kbd style="color:inherit;opacity:.8">⌘↵</kbd></button>
+  </div>
+</section>
+
+<div id="split" role="separator" aria-orientation="vertical" tabindex="0" title="拖动调整大小，双击还原"></div>
+
+<section class="col" id="right">
+  <div class="chat-head">
+    <b>Claude</b><span class="status" id="status">就绪</span><span class="mode" id="mode" hidden></span>
+    <span class="sp"></span>
+    <button class="sid" id="sid" title="点击复制 claude --resume 命令">新会话</button>
+    <button id="bHist" title="历史会话">历史</button>
+    <button id="bNew" title="新对话">新对话</button>
+  </div>
+  <div class="chat-body">
+    <div id="log">
+      <div class="empty" id="empty">
+        <div class="steps">
+          <div><i>1</i>在左边画一画，或者只打字</div>
+          <div><i>2</i>点「发送」（或按 <kbd class="k-send">⌘↵</kbd>）</div>
+          <div><i>3</i>Claude 看懂后，在这里回复你</div>
+        </div>
+        <div class="try">不知道画什么？点一个试试：</div>
+        <div class="chips" id="chips">
+          <button type="button">看图猜成语</button>
+          <button type="button">这张图里画的是什么？</button>
+          <button type="button">把这个草图做成网页</button>
+          <button type="button">帮我检查这个流程图</button>
+        </div>
+      </div>
+    </div>
+    <div id="hist" hidden>
+      <div class="hnote" id="histNote"></div>
+      <div id="histList"></div>
+    </div>
+  </div>
+</section>
+
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const cv = $('cv'), ctx = cv.getContext('2d');
+  const wrap = $('wrap'), hint = $('hint');
+  const log = $('log'), text = $('text'), bSend = $('bSend'), statusEl = $('status');
+
+  // ---- 状态 ----
+  let strokes = [];          // 已完成笔画 { tool, size, pts:[[x,y,p,t],...] }
+  let cur = null;            // 正在画的笔画
+  let tool = 'pen';          // pen | line | circle | rect | arrow | eraser
+  let snapOn = true;         // 手绘的圆、直线画完自动规整
+  let t0 = 0;                // 本轮起点时间，用来记相对时间
+  let busy = false;
+  let dpr = 1, W = 0, H = 0;
+
+  // ---- 画布尺寸 ----
+  function resize() {
+    dpr = window.devicePixelRatio || 1;
+    const r = wrap.getBoundingClientRect();
+    W = r.width; H = r.height;
+    cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
+    redraw();
+  }
+  new ResizeObserver(resize).observe(wrap);
+
+  // ---- 绘制 ----
+  function widthAt(s, p) {
+    const base = s.tool === 'eraser' ? s.size * 4 : s.size;
+    // 压感：0.3~1.0 倍；鼠标/无压感设备 pressure 恒为 0.5，保持原粗细
+    return s.tool === 'eraser' ? base : base * (0.35 + 1.3 * p);
+  }
+  function drawStroke(s) {
+    const pts = s.pts;
+    if (!pts.length) return;
+    ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    ctx.strokeStyle = s.tool === 'eraser' ? '#ffffff' : '#111111';
+    if (pts.length === 1) {
+      ctx.fillStyle = ctx.strokeStyle;
+      ctx.beginPath(); ctx.arc(pts[0][0], pts[0][1], widthAt(s, pts[0][2]) / 2, 0, Math.PI * 2); ctx.fill();
+      return;
+    }
+    for (let i = 1; i < pts.length; i++) {
+      const a = pts[i - 1], b = pts[i];
+      ctx.lineWidth = widthAt(s, (a[2] + b[2]) / 2);
+      ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); ctx.stroke();
+    }
+  }
+  function redraw() {
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, W, H);
+    for (const s of strokes) drawStroke(s);
+    if (cur) drawStroke(cur);
+    hint.style.display = strokes.length || cur ? 'none' : 'block';
+  }
+
+  // ---- 形状工具与自动规整 ----
+  const SHAPE_TOOLS = ['line', 'circle', 'rect', 'arrow'];
+  const dist = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]);
+  const pathLen = (P) => { let L = 0; for (let i = 1; i < P.length; i++) L += dist(P[i - 1], P[i]); return L; };
+
+  // 拖动起点 a、当前点 b → 形状的折线点（压感固定 0.5，粗细即所选粗细）
+  function shapePts(kind, a, b, shift) {
+    let [bx, by] = b;
+    const dx = bx - a[0], dy = by - a[1];
+    const pt = (x, y) => [x, y, 0.5, 0];
+    if (kind === 'line' || kind === 'arrow') {
+      if (shift) { // 锁定到 45° 的整数倍
+        const ang = Math.round(Math.atan2(dy, dx) / (Math.PI / 4)) * (Math.PI / 4), len = Math.hypot(dx, dy);
+        bx = a[0] + len * Math.cos(ang); by = a[1] + len * Math.sin(ang);
+      }
+      if (kind === 'line') return [pt(a[0], a[1]), pt(bx, by)];
+      const th = Math.atan2(by - a[1], bx - a[0]), len = Math.hypot(bx - a[0], by - a[1]), h = Math.min(18, len * 0.35);
+      const h1 = [bx - h * Math.cos(th - 0.5), by - h * Math.sin(th - 0.5)], h2 = [bx - h * Math.cos(th + 0.5), by - h * Math.sin(th + 0.5)];
+      return [pt(a[0], a[1]), pt(bx, by), pt(h1[0], h1[1]), pt(bx, by), pt(h2[0], h2[1])];
+    }
+    if (kind === 'rect') {
+      if (shift) { const m = Math.max(Math.abs(dx), Math.abs(dy)); bx = a[0] + Math.sign(dx || 1) * m; by = a[1] + Math.sign(dy || 1) * m; }
+      return [pt(a[0], a[1]), pt(bx, a[1]), pt(bx, by), pt(a[0], by), pt(a[0], a[1])];
+    }
+    // circle：a 是圆心，到 b 的距离是半径；从 b 的方向出发画一整圈，首尾相接
+    const r = Math.hypot(dx, dy), a0 = Math.atan2(dy, dx), out = [];
+    for (let i = 0; i <= 64; i++) { const t = a0 + (i / 64) * Math.PI * 2; out.push(pt(a[0] + r * Math.cos(t), a[1] + r * Math.sin(t))); }
+    return out;
+  }
+
+  // 按弧长重采样成 n 个点
+  function resample(P, n) {
+    const L = pathLen(P), step = L / (n - 1), out = [[P[0][0], P[0][1]]];
+    let acc = 0, i = 1, prev = [P[0][0], P[0][1]];
+    while (out.length < n && i < P.length) {
+      const d = dist(prev, P[i]);
+      if (acc + d >= step && d > 0) {
+        const k = (step - acc) / d, q = [prev[0] + k * (P[i][0] - prev[0]), prev[1] + k * (P[i][1] - prev[1])];
+        out.push(q); prev = q; acc = 0;
+      } else { acc += d; prev = [P[i][0], P[i][1]]; i++; }
+    }
+    while (out.length < n) out.push([P[P.length - 1][0], P[P.length - 1][1]]);
+    return out;
+  }
+
+  // 最小二乘拟合圆（Kahan 代数法）：x²+y² = 2cx·x + 2cy·y + c
+  function fitCircle(P) {
+    let sx = 0, sy = 0, sxx = 0, syy = 0, sxy = 0, sz = 0, sxz = 0, syz = 0;
+    const n = P.length;
+    for (const [x, y] of P) { const z = x * x + y * y; sx += x; sy += y; sxx += x * x; syy += y * y; sxy += x * y; sz += z; sxz += x * z; syz += y * z; }
+    // 解 [sxx sxy sx; sxy syy sy; sx sy n]·[A B C] = [sxz syz sz]
+    const M = [[sxx, sxy, sx, sxz], [sxy, syy, sy, syz], [sx, sy, n, sz]];
+    for (let i = 0; i < 3; i++) {
+      let piv = i; for (let r = i + 1; r < 3; r++) if (Math.abs(M[r][i]) > Math.abs(M[piv][i])) piv = r;
+      if (Math.abs(M[piv][i]) < 1e-9) return null;
+      [M[i], M[piv]] = [M[piv], M[i]];
+      for (let r = 0; r < 3; r++) if (r !== i) { const f = M[r][i] / M[i][i]; for (let c = i; c < 4; c++) M[r][c] -= f * M[i][c]; }
+    }
+    const A = M[0][3] / M[0][0], B = M[1][3] / M[1][1], C = M[2][3] / M[2][2];
+    const cx = A / 2, cy = B / 2, r2 = C + cx * cx + cy * cy;
+    return r2 > 0 ? { cx, cy, r: Math.sqrt(r2) } : null;
+  }
+
+  // 识别手绘笔画：像直线 → 直线；像圆 → 正圆；否则 null（保持手绘）
+  function recognize(s) {
+    const P = s.pts;
+    if (P.length < 8) return null;
+    const L = pathLen(P);
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity, pSum = 0;
+    for (const q of P) { x0 = Math.min(x0, q[0]); y0 = Math.min(y0, q[1]); x1 = Math.max(x1, q[0]); y1 = Math.max(y1, q[1]); pSum += q[2]; }
+    if (Math.hypot(x1 - x0, y1 - y0) < 30) return null;       // 太小：可能是点、字或涂鸦
+    const pAvg = pSum / P.length, tA = P[0][3], tB = P[P.length - 1][3];
+    const first = P[0], last = P[P.length - 1], chord = dist(first, last);
+
+    // 直线：弦长占路径 90% 以上，且偏离弦线不超过 6%（至少 4px 容差）
+    if (L >= 40 && chord / L > 0.9) {
+      const ux = (last[0] - first[0]) / chord, uy = (last[1] - first[1]) / chord;
+      let maxDev = 0;
+      for (const q of P) maxDev = Math.max(maxDev, Math.abs((q[0] - first[0]) * uy - (q[1] - first[1]) * ux));
+      if (maxDev <= Math.max(4, chord * 0.06)) return { shape: 'line', pts: [[first[0], first[1], pAvg, tA], [last[0], last[1], pAvg, tB]] };
+      return null;
+    }
+
+    // 圆：基本闭合、绕了一整圈、各点到圆心距离接近、没有明显拐角（排除方形）
+    if (L < 60 || chord / L > 0.2) return null;
+    const R = resample(P, 48), c = fitCircle(R);
+    if (!c || c.r < 12) return null;
+    let dev = 0, devMax = 0;
+    for (const q of R) { const d = Math.abs(Math.hypot(q[0] - c.cx, q[1] - c.cy) - c.r) / c.r; dev += d; devMax = Math.max(devMax, d); }
+    if (dev / R.length > 0.1 || devMax > 0.22) return null;
+    let sweep = 0, absSweep = 0, prevA = Math.atan2(R[0][1] - c.cy, R[0][0] - c.cx);
+    for (let i = 1; i < R.length; i++) {
+      const a = Math.atan2(R[i][1] - c.cy, R[i][0] - c.cx);
+      let d = a - prevA; while (d > Math.PI) d -= 2 * Math.PI; while (d < -Math.PI) d += 2 * Math.PI;
+      sweep += d; absSweep += Math.abs(d); prevA = a;
+    }
+    if (Math.abs(sweep) < 0.85 * 2 * Math.PI || Math.abs(sweep) / absSweep < 0.9) return null;
+    // 先平滑一遍，去掉手抖的高频噪声，再量转角：圆均匀，方形集中在 4 个角
+    let Q = R;
+    for (let k = 0; k < 1; k++) Q = Q.map((q, i) => (i === 0 || i === Q.length - 1) ? q : [(Q[i - 1][0] + q[0] + Q[i + 1][0]) / 3, (Q[i - 1][1] + q[1] + Q[i + 1][1]) / 3]);
+    const turn = [];
+    for (let i = 3; i + 3 < Q.length; i++) {
+      const v1 = [Q[i][0] - Q[i - 3][0], Q[i][1] - Q[i - 3][1]], v2 = [Q[i + 3][0] - Q[i][0], Q[i + 3][1] - Q[i][1]];
+      turn.push(Math.abs(Math.atan2(v1[0] * v2[1] - v1[1] * v2[0], v1[0] * v2[0] + v1[1] * v2[1])));
+    }
+    const mean = turn.reduce((a, b) => a + b, 0) / turn.length;
+    if (mean <= 0 || Math.max(...turn) > 1.9 * mean) return null;
+
+    const dir = sweep > 0 ? 1 : -1, a0 = Math.atan2(first[1] - c.cy, first[0] - c.cx), out = [];
+    for (let i = 0; i <= 64; i++) {
+      const t = a0 + dir * (i / 64) * Math.PI * 2;
+      out.push([c.cx + c.r * Math.cos(t), c.cy + c.r * Math.sin(t), pAvg, Math.round(tA + (tB - tA) * i / 64)]);
+    }
+    return { shape: 'circle', pts: out, circle: { cx: c.cx, cy: c.cy, r: c.r } };
+  }
+
+  // ---- 笔输入（Pointer Events：Wacom 笔的压感/橡皮端都走这里） ----
+  function pos(e) {
+    const r = cv.getBoundingClientRect();
+    return [e.clientX - r.left, e.clientY - r.top];
+  }
+  function isEraserEvent(e) {
+    // 笔尾橡皮端 buttons&32，或 button===5
+    return (e.buttons & 32) === 32 || e.button === 5;
+  }
+  cv.addEventListener('pointerdown', (e) => {
+    if (e.pointerType === 'mouse' && e.button !== 0 && e.button !== 5) return;
+    cv.setPointerCapture(e.pointerId);
+    if (!t0) t0 = performance.now();
+    const useEraser = tool === 'eraser' || isEraserEvent(e);
+    const [x, y] = pos(e);
+    const p = e.pointerType === 'mouse' ? 0.5 : (e.pressure || 0.5);
+    cur = { tool: useEraser ? 'eraser' : 'pen', size: +$('size').value, pts: [[x, y, p, Math.round(performance.now() - t0)]] };
+    if (!useEraser && SHAPE_TOOLS.includes(tool)) { cur.shape = tool; cur.start = [x, y, Math.round(performance.now() - t0)]; }
+    redraw();
+    e.preventDefault();
+  });
+  cv.addEventListener('pointermove', (e) => {
+    if (!cur) return;
+    if (cur.shape) { // 形状工具：只关心起点和当前点
+      const q = pos(e);
+      cur.moved = dist(cur.start, q) > 3;
+      cur.pts = shapePts(cur.shape, cur.start, q, e.shiftKey);
+      if (cur.shape === 'circle') cur.circle = { cx: cur.start[0], cy: cur.start[1], r: dist(cur.start, q) };
+      redraw(); e.preventDefault(); return;
+    }
+    const evs = e.getCoalescedEvents ? e.getCoalescedEvents() : [e];
+    for (const ev of (evs.length ? evs : [e])) {
+      const [x, y] = pos(ev);
+      const p = e.pointerType === 'mouse' ? 0.5 : (ev.pressure || 0.5);
+      cur.pts.push([x, y, p, Math.round(performance.now() - t0)]);
+    }
+    redraw();
+    e.preventDefault();
+  });
+  function end(e) {
+    if (!cur) return;
+    const s = cur; cur = null;
+    if (s.shape) {
+      if (!s.moved) { redraw(); return; }                  // 只点了一下没拖动：不画
+      const ts = s.start[2], te = Math.round(performance.now() - t0), n = s.pts.length;
+      delete s.start; delete s.moved;
+      s.pts.forEach((q, i) => { q[3] = Math.round(ts + (te - ts) * i / Math.max(1, n - 1)); }); // 时间沿形状均匀分布
+    } else if (snapOn && s.tool === 'pen' && !(e && e.altKey)) {
+      const r = recognize(s);
+      if (r) { s.orig = s.pts; s.pts = r.pts; s.shape = r.shape; if (r.circle) s.circle = r.circle; flash(r.shape === 'circle' ? '已规整成圆（撤销可还原）' : '已规整成直线（撤销可还原）'); }
+    }
+    strokes.push(s); redraw();
+    e && e.preventDefault();
+  }
+  cv.addEventListener('pointerup', end);
+  cv.addEventListener('pointercancel', end);
+  cv.addEventListener('contextmenu', (e) => e.preventDefault());
+
+  // ---- 工具栏 ----
+  const TOOL_BTN = { pen: 'bPen', line: 'bLine', circle: 'bCircle', rect: 'bRect', arrow: 'bArrow', eraser: 'bEraser' };
+  function setTool(t) {
+    tool = t;
+    for (const [k, id] of Object.entries(TOOL_BTN)) $(id).classList.toggle('on', k === t);
+  }
+  function setSnap(on) { snapOn = on; $('bSnap').classList.toggle('on', on); flash(on ? '自动规整：开' : '自动规整：关'); }
+  // 撤销：刚被自动规整的笔画，先还原成手绘；再撤销才删除
+  function undo() {
+    const last = strokes[strokes.length - 1];
+    if (last && last.orig) { last.pts = last.orig; delete last.orig; delete last.shape; delete last.circle; redraw(); flash('已还原成手绘'); return; }
+    strokes.pop(); redraw();
+  }
+  function clearBoard() { strokes = []; cur = null; t0 = 0; redraw(); }
+  for (const [k, id] of Object.entries(TOOL_BTN)) $(id).onclick = () => setTool(k);
+  $('bSnap').onclick = () => setSnap(!snapOn);
+  $('bUndo').onclick = undo;
+  $('bClear').onclick = clearBoard;
+
+  // ---- 快捷键（可映射到 Wacom Express Keys） ----
+  window.addEventListener('keydown', (e) => {
+    const meta = e.metaKey || e.ctrlKey;
+    const inText = document.activeElement === text;
+    if (meta && e.key === 'Enter') { e.preventDefault(); send(); return; }
+    if (meta && e.key.toLowerCase() === 'z' && !inText) { e.preventDefault(); undo(); return; }
+    if (meta && (e.key === 'Backspace' || e.key === 'Delete') && !inText) { e.preventDefault(); clearBoard(); return; }
+    if (!meta && !inText && !e.altKey) {
+      const k = e.key.toLowerCase();
+      if (k === 'p') setTool('pen');
+      else if (k === 'l') setTool('line');
+      else if (k === 'o') setTool('circle');
+      else if (k === 'r') setTool('rect');
+      else if (k === 'a') setTool('arrow');
+      else if (k === 'e') setTool('eraser');
+      else if (k === 's') setSnap(!snapOn);
+      else if (k === 'f') toggleFull();
+    }
+  });
+
+  // ---- 文字框自适应高度 ----
+  text.addEventListener('input', () => {
+    text.style.height = 'auto';
+    text.style.height = Math.min(text.scrollHeight, 120) + 'px';
+  });
+
+  // ---- 对话流 ----
+  // 工具调用的显示名：给不看代码的人看，不暴露内部工具名
+  function toolLabel(name) {
+    const n = String(name || '');
+    if (n === 'Read') return '正在查看图片或文件';
+    if (/^(Edit|Write|NotebookEdit)$/.test(n)) return '正在修改文件';
+    if (n === 'Bash') return '正在运行命令';
+    if (/^(Grep|Glob)$/.test(n)) return '正在搜索';
+    if (/^Web/.test(n)) return '正在上网查资料';
+    if (/^mcp__/.test(n)) return '正在调用工具';
+    return '正在处理（' + n + '）';
+  }
+  function scrollDown() { log.scrollTop = log.scrollHeight; }
+  function add(cls, content) {
+    $('empty') && $('empty').remove();
+    const d = document.createElement('div');
+    d.className = cls;
+    if (typeof content === 'string') d.textContent = content;
+    else if (content) d.appendChild(content);
+    log.appendChild(d); scrollDown();
+    return d;
+  }
+  function setBusy(b) {
+    busy = b; bSend.disabled = b;
+    statusEl.textContent = b ? '思考中…' : '就绪';
+  }
+
+  // 导出 PNG（白底）+ 笔画 JSON
+  function exportSketch() {
+    if (!strokes.length) return { image: null, strokes: [] };
+    return {
+      image: cv.toDataURL('image/png'),
+      strokes: strokes.map((s, i) => ({
+        order: i + 1, tool: s.tool, size: s.size,
+        ...(s.shape ? { shape: s.shape } : {}), // line | circle | rect | arrow：规整或形状工具产生的笔画，points 是规则图形的折线
+        ...(s.circle ? { circle: { cx: Math.round(s.circle.cx), cy: Math.round(s.circle.cy), r: Math.round(s.circle.r) } } : {}),
+        points: s.pts.map(([x, y, p, t]) => ({ x: Math.round(x), y: Math.round(y), p: +p.toFixed(2), t })),
+      })),
+    };
+  }
+
+  async function send() {
+    if (busy) return;
+    const msg = text.value.trim();
+    const sk = exportSketch();
+    if (!msg && !sk.image) return;
+
+    // 用户消息：缩略图 + 文字
+    const box = document.createElement('div');
+    if (sk.image) { const im = document.createElement('img'); im.src = sk.image; box.appendChild(im); }
+    if (msg) box.appendChild(document.createTextNode(msg));
+    add('msg user', box);
+
+    text.value = ''; text.style.height = 'auto';
+    clearBoard();               // 发出后清空画板，下一轮从空白开始
+    setBusy(true);
+
+    const agent = add('msg agent cursor', '');
+    let got = false;
+
+    try {
+      const res = await fetch('/api/send', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: msg, image: sk.image, strokes: sk.strokes }),
+      });
+      if (!res.ok) throw new Error(await res.text() || ('HTTP ' + res.status));
+
+      const reader = res.body.getReader();
+      const dec = new TextDecoder();
+      let buf = '';
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        let i;
+        while ((i = buf.indexOf('\n\n')) >= 0) {
+          const block = buf.slice(0, i); buf = buf.slice(i + 2);
+          const ev = /^event: (.+)$/m.exec(block), da = /^data: (.+)$/m.exec(block);
+          if (!ev || !da) continue;
+          const data = JSON.parse(da[1]);
+          if (ev[1] === 'delta') { got = true; agent.textContent += data.text; scrollDown(); }
+          else if (ev[1] === 'tool') { add('tool', '· ' + toolLabel(data.name)); }
+          else if (ev[1] === 'error') { add('msg err', '出错：' + data.message); }
+          else if (ev[1] === 'notice') { add('msg sys', data.message); }
+          else if (ev[1] === 'saved') { statusEl.textContent = data.via === 'code' ? '已交给 Code 窗口，等它回复…' : '独立 agent 回复中…'; }
+          else if (ev[1] === 'done') { if (data.sessionId) setSid(data.sessionId); }
+        }
+      }
+    } catch (e) {
+      add('msg err', '出错：' + (e.message || e));
+    } finally {
+      agent.classList.remove('cursor');
+      if (!got && !agent.textContent) agent.remove();
+      setBusy(false);
+      text.focus();
+    }
+  }
+
+  $('bSend').onclick = send;
+  $('bNew').onclick = async () => {
+    if (busy) return;
+    await fetch('/api/reset', { method: 'POST' });
+    log.innerHTML = '';
+    hist.hidden = true;
+    setSid(null);
+    add('msg sys', '已开始新对话');
+    clearBoard();
+  };
+
+  // ---- 会话 ID 与历史会话 ----
+  const sidEl = $('sid'), hist = $('hist'), histList = $('histList'), histNote = $('histNote');
+  let sessionId = null;
+  const urlSession = new URLSearchParams(location.search).get('session'); // 打开页面时 URL 上带的会话，启动时优先接这个
+
+  // 当前会话写进 URL（?session=<id>），刷新、收藏、分享链接都能回到同一会话；用 replaceState，不污染后退历史
+  function syncUrl() {
+    const u = new URL(location.href);
+    if (sessionId) u.searchParams.set('session', sessionId); else u.searchParams.delete('session');
+    if (u.href !== location.href) history.replaceState(null, '', u);
+  }
+
+  // ---- 实时跟随：Code 窗口里新增的消息（服务端 /api/tail，SSE）----
+  let tail = null, tailId = null, tailPos = null, tailRetry = 0, mirrorEl = null;
+  function stopTail() {
+    if (tail) { tail.close(); tail = null; }
+    clearTimeout(tailRetry); tailId = null; tailPos = null; mirrorEl = null;
+  }
+  function startTail(id, from) {
+    stopTail();
+    if (!id) return;
+    tailId = id; tailPos = from == null ? null : from;
+    const url = '/api/tail?session=' + encodeURIComponent(id) + (tailPos == null ? '' : '&from=' + tailPos);
+    const es = new EventSource(url);
+    tail = es;
+    es.addEventListener('pos', (e) => { tailPos = JSON.parse(e.data).pos; });
+    es.addEventListener('msg', (e) => mirror(JSON.parse(e.data)));
+    es.onerror = () => { // 断线：用最新位置手动重连，避免 EventSource 自动重连带着旧的 from 造成重复
+      if (tail !== es) return;
+      es.close(); tail = null;
+      tailRetry = setTimeout(() => { if (sessionId === id) startTail(id, tailPos); }, 1000);
+    };
+  }
+  function mirror(m) {
+    if (m.role === 'agent' && mirrorEl && mirrorEl.isConnected && log.lastElementChild === mirrorEl) {
+      mirrorEl.textContent += '\n\n' + m.text; scrollDown(); return; // 相邻的 agent 文本合并
+    }
+    renderMsg(m);
+    mirrorEl = m.role === 'agent' ? log.lastElementChild : null;
+  }
+
+  function setSid(id, noTail) {
+    const changed = (id || null) !== sessionId;
+    sessionId = id || null;
+    if (!noTail && (changed || tailId !== sessionId)) startTail(sessionId);
+    syncUrl();
+    sidEl.textContent = sessionId ? sessionId.slice(0, 8) : '新会话';
+    for (const b of histList.querySelectorAll('.hitem')) b.classList.toggle('cur', b.dataset.id === sessionId);
+  }
+  function flash(msg) {
+    statusEl.textContent = msg;
+    setTimeout(() => { if (!busy) statusEl.textContent = '就绪'; }, 2000);
+  }
+  sidEl.onclick = async () => {
+    if (!sessionId) return;
+    const cmd = 'claude --resume ' + sessionId;
+    try { await navigator.clipboard.writeText(cmd); flash('已复制 resume 命令'); }
+    catch { flash(cmd); }
+  };
+
+  function fmtTime(ms) {
+    return new Date(ms).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
+  }
+
+  async function openHist() {
+    hist.hidden = false;
+    histNote.textContent = '';
+    histList.textContent = '加载中…';
+    try {
+      const r = await fetch('/api/sessions');
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const d = await r.json();
+      histNote.textContent = d.dir;
+      histList.innerHTML = '';
+      if (!d.sessions.length) {
+        histList.textContent = d.missing ? '没找到会话目录，确认 agent 工作目录是否对应你的 Claude 项目' : '这个目录下还没有会话';
+        return;
+      }
+      for (const s of d.sessions) {
+        const b = document.createElement('button');
+        b.className = 'hitem' + (s.id === sessionId ? ' cur' : '');
+        b.dataset.id = s.id;
+        const t = document.createElement('div'); t.className = 't'; t.textContent = s.title;
+        const m = document.createElement('div'); m.className = 'm'; m.textContent = fmtTime(s.mtime) + ' · ' + s.id.slice(0, 8);
+        b.append(t, m);
+        b.onclick = () => loadSession(s.id);
+        histList.appendChild(b);
+      }
+    } catch (e) {
+      histList.textContent = '读取失败：' + (e.message || e);
+    }
+  }
+
+  function renderMsg(m) {
+    if (m.role === 'user') {
+      const box = document.createElement('div');
+      if (m.image) { const im = document.createElement('img'); im.src = m.image; box.appendChild(im); }
+      else if (m.sketch) { box.appendChild(document.createTextNode('[草图]' + (m.text ? ' ' : ''))); }
+      if (m.text) box.appendChild(document.createTextNode(m.text));
+      add('msg user', box);
+    } else if (m.role === 'agent') {
+      add('msg agent', m.text);
+    } else if (m.role === 'tool') {
+      add('tool', '· ' + toolLabel(m.name));
+    }
+  }
+
+  // attach=false：服务端已经接上这个会话（启动器接续 Code 会话），只需要显示，不必再 resume
+  async function loadSession(id, attach = true) {
+    if (busy) return;
+    try {
+      const r = await fetch('/api/sessions/' + encodeURIComponent(id));
+      if (!r.ok) throw new Error(await r.text() || 'HTTP ' + r.status);
+      const d = await r.json();
+      if (attach) {
+        const rr = await fetch('/api/resume', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }) });
+        if (!rr.ok) throw new Error(await rr.text() || 'HTTP ' + rr.status);
+      }
+      log.innerHTML = '';
+      for (const m of d.messages) renderMsg(m);
+      setSid(id, true);
+      startTail(id, d.size);   // 从已显示内容的末尾接着跟，不漏不重
+      hist.hidden = true;
+      add('msg sys', d.pending
+        ? '已连接到 Code 窗口的对话，继续发送即可'
+        : '已接上之前的对话，继续发送即可');
+      clearBoard();
+    } catch (e) {
+      flash('加载失败');
+      add('msg err', '加载会话失败：' + (e.message || e));
+      hist.hidden = true;
+    }
+  }
+
+  $('bHist').onclick = () => { if (hist.hidden) openHist(); else hist.hidden = true; };
+  window.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !hist.hidden) hist.hidden = true; });
+
+  // ---- 全屏 ----
+  const fsEl = () => document.fullscreenElement || document.webkitFullscreenElement;
+  function toggleFull() {
+    if (fsEl()) {
+      (document.exitFullscreen || document.webkitExitFullscreen).call(document);
+      return;
+    }
+    const root = document.documentElement;
+    const req = root.requestFullscreen || root.webkitRequestFullscreen;
+    if (!req) { flash('此浏览器不支持全屏'); return; }
+    const p = req.call(root);
+    if (p && p.catch) p.catch(() => flash('浏览器拒绝了全屏'));
+  }
+  function syncFull() { $('fullLbl').textContent = fsEl() ? '退出全屏' : '全屏'; }
+  document.addEventListener('fullscreenchange', syncFull);
+  document.addEventListener('webkitfullscreenchange', syncFull);
+  $('bFull').onclick = toggleFull;
+
+  // ---- 可拖动分隔条：左右布局拖宽度，窄屏上下布局拖高度 ----
+  const splitEl = $('split');
+  const stackMQ = window.matchMedia('(max-width: 860px)');
+  const SPLIT_KEY = 'sk.split', DEF_RATIO = 1.25 / 2.25, MIN_PX = 260, HANDLE = 12;
+  let ratio = DEF_RATIO, splitDrag = false;
+  try { const v = parseFloat(localStorage.getItem(SPLIT_KEY)); if (v > 0.1 && v < 0.9) ratio = v; } catch {}
+  const saveRatio = () => { try { localStorage.setItem(SPLIT_KEY, String(ratio)); } catch {} };
+
+  function bodyBox() {
+    const cs = getComputedStyle(document.body), r = document.body.getBoundingClientRect();
+    return stackMQ.matches
+      ? { start: r.top + parseFloat(cs.paddingTop), size: r.height - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom) - HANDLE }
+      : { start: r.left + parseFloat(cs.paddingLeft), size: r.width - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight) - HANDLE };
+  }
+  function clampRatio(r) {
+    const size = bodyBox().size;
+    const min = Math.min(MIN_PX / Math.max(size, 1), 0.5);   // 窗口太小时退回 50/50
+    return Math.max(min, Math.min(1 - min, r));
+  }
+  function applySplit() {
+    const a = Math.round(clampRatio(ratio) * 1000), b = 1000 - a;
+    const st = document.body.style;
+    if (stackMQ.matches) {
+      st.gridTemplateColumns = '';
+      st.gridTemplateRows = `minmax(160px, ${a}fr) ${HANDLE}px minmax(160px, ${b}fr)`;
+    } else {
+      st.gridTemplateRows = '';
+      st.gridTemplateColumns = `minmax(240px, ${a}fr) ${HANDLE}px minmax(240px, ${b}fr)`;
+    }
+    splitEl.setAttribute('aria-orientation', stackMQ.matches ? 'horizontal' : 'vertical');
+  }
+  function dragTo(e) {
+    const { start, size } = bodyBox();
+    const pos = (stackMQ.matches ? e.clientY : e.clientX) - start - HANDLE / 2;
+    ratio = clampRatio(pos / size);
+    applySplit();
+  }
+  splitEl.addEventListener('pointerdown', (e) => {
+    splitEl.setPointerCapture(e.pointerId);
+    splitDrag = true; splitEl.classList.add('drag');
+    document.body.style.cursor = stackMQ.matches ? 'row-resize' : 'col-resize';
+    document.body.style.userSelect = 'none';
+    e.preventDefault();
+  });
+  splitEl.addEventListener('pointermove', (e) => { if (splitDrag) dragTo(e); });
+  function endSplit() {
+    if (!splitDrag) return;
+    splitDrag = false; splitEl.classList.remove('drag');
+    document.body.style.cursor = ''; document.body.style.userSelect = '';
+    saveRatio();
+  }
+  splitEl.addEventListener('pointerup', endSplit);
+  splitEl.addEventListener('pointercancel', endSplit);
+  splitEl.addEventListener('dblclick', () => { ratio = DEF_RATIO; applySplit(); saveRatio(); });
+  splitEl.addEventListener('keydown', (e) => {
+    const step = e.shiftKey ? 0.05 : 0.02;
+    if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') ratio = clampRatio(ratio - step);
+    else if (e.key === 'ArrowRight' || e.key === 'ArrowDown') ratio = clampRatio(ratio + step);
+    else if (e.key === 'Home') ratio = DEF_RATIO;
+    else return;
+    e.preventDefault(); applySplit(); saveRatio();
+  });
+  stackMQ.addEventListener('change', applySplit);
+  window.addEventListener('resize', applySplit);
+  applySplit();
+
+
+  // ---- 新手引导 ----
+  const isMac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
+  if (!isMac) { // 快捷键显示成 Ctrl，和实际可用的按键一致
+    for (const el of document.querySelectorAll('kbd, [title]')) {
+      if (el.tagName === 'KBD') el.textContent = el.textContent.replace('⌘', 'Ctrl+');
+      else if (el.title) el.title = el.title.replace('⌘', 'Ctrl+');
+    }
+  }
+  const chips = $('chips');
+  if (chips) chips.onclick = (e) => {
+    const b = e.target.closest('button'); if (!b) return;
+    text.value = b.textContent; text.dispatchEvent(new Event('input', { bubbles: true })); text.focus();
+  };
+  const modeEl = $('mode');
+  function showMode(s) { // 告诉用户当前是谁在回答
+    const code = s.bridge && s.sessionId && s.bridge.session === s.sessionId && (s.bridge.armed || s.bridge.inflight);
+    modeEl.hidden = false;
+    modeEl.className = 'mode' + (code ? ' on' : '');
+    modeEl.textContent = code ? '已连接 Code 窗口' : '独立模式';
+    modeEl.title = code ? '消息会直接交给你正在用的 Claude Code 窗口回答，上下文是同一份'
+      : '没有连接 Code 窗口，由画板单独启动的 Claude 回答。想接上 Code 窗口，在 Claude Code 里运行 /sketch-agent:start';
+  }
+
+  // 服务端的当前会话和页面不一致时（打开页面、刷新、在 Code 里重新 /sketch-agent:start 切换会话）跟过去并显示历史
+  let syncTried = null; // 同一个会话加载失败就不再反复重试
+  function syncState() {
+    if (busy) return;
+    fetch('/api/state').then((r) => r.json()).then((s) => {
+      showMode(s);
+      if (busy || !s.sessionId || s.busy || s.sessionId === sessionId || s.sessionId === syncTried) return;
+      syncTried = s.sessionId;
+      loadSession(s.sessionId, false);
+    }).catch(() => {});
+  }
+  async function init() {
+    if (urlSession && /^[A-Za-z0-9-]{8,64}$/.test(urlSession)) {
+      await loadSession(urlSession); // URL 指定的会话：接上；会话文件不存在则放弃，回退到服务端当前会话
+      if (sessionId === urlSession) return;
+      syncUrl();
+    }
+    syncState();
+  }
+  init();
+  setInterval(syncState, 2000);
+
+  resize();
+})();
+</script>
+</body>
+</html>

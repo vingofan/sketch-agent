@@ -1,0 +1,14 @@
+{
+  "name": "sketch-agent",
+  "description": "Sketch Agent：把画板和数位板当作 Claude 的输入",
+  "owner": {
+    "name": "vingofan"
+  },
+  "plugins": [
+    {
+      "name": "sketch-agent",
+      "source": "./",
+      "description": "画板 + 文字输入 + 对话流，/sketch-agent:start 一键启动"
+    }
+  ]
+}
