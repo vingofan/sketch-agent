@@ -621,7 +621,7 @@ const server = http.createServer((req, res) => {
   if (req.method === 'GET' && url.pathname === '/api/state') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({
-      sessionId, busy, sketchDir: SKETCH_DIR, cwd: AGENT_CWD, projectDir: projectDir(),
+      sessionId, codeSession, busy, sketchDir: SKETCH_DIR, cwd: AGENT_CWD, projectDir: projectDir(),
       root: __dirname, version: VERSION, sessionFile: !!sessionId && sessionFileExists(sessionId),
       bridge: { armed: !!bridge.waiter, inflight: !!bridge.inflight, queued: bridge.queue.length, session: bridge.session },
     }));

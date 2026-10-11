@@ -48,7 +48,7 @@
   textarea:focus { border-color: var(--muted); }
 
   /* 右栏：对话流 */
-  .chat-head { padding: 10px 14px; border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 8px; }
+  .chat-head { padding: 10px 14px; border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
   .chat-head b { font-weight: 600; }
   .chat-head .sp { flex: 1; }
   .status { color: var(--muted); font-size: 12px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -137,6 +137,7 @@
   <div class="chat-head">
     <b>Claude</b><span class="status" id="status">就绪</span><span class="mode" id="mode" hidden></span>
     <span class="sp"></span>
+    <button id="bBack" hidden title="回到你在 Code 窗口里正在进行的那个会话">↩ 回到 Code</button>
     <button class="sid" id="sid" title="点击复制 claude --resume 命令">新会话</button>
     <button id="bHist" title="历史会话">历史</button>
     <button id="bNew" title="新对话">新对话</button>
@@ -593,6 +594,7 @@
   function setSid(id, noTail) {
     const changed = (id || null) !== sessionId;
     sessionId = id || null;
+    if (typeof showBack === 'function') showBack(codeSid);
     if (!noTail && (changed || tailId !== sessionId)) startTail(sessionId);
     syncUrl();
     sidEl.textContent = sessionId ? sessionId.slice(0, 8) : '新会话';
@@ -790,9 +792,17 @@
     text.value = b.textContent; text.dispatchEvent(new Event('input', { bubbles: true })); text.focus();
   };
   const modeEl = $('mode');
+  // 「回到 Code 会话」：正在看别的会话时才显示
+  let codeSid = null;
+  function showBack(id) {
+    codeSid = id || null;
+    $('bBack').hidden = !codeSid || codeSid === sessionId;
+    modeEl.hidden = !$('bBack').hidden;   // 返回按钮出现 = 正在看别的会话，「独立模式」标签多余，给按钮让位
+  }
+  $('bBack').onclick = () => { if (codeSid && !busy) loadSession(codeSid); };
   function showMode(s) { // 告诉用户当前是谁在回答
     const code = s.bridge && s.sessionId && s.bridge.session === s.sessionId && (s.bridge.armed || s.bridge.inflight);
-    modeEl.hidden = false;
+    modeEl.hidden = !$('bBack').hidden;
     modeEl.className = 'mode' + (code ? ' on' : '');
     modeEl.textContent = code ? '已连接 Code 窗口' : '独立模式';
     modeEl.title = code ? '消息会直接交给你正在用的 Claude Code 窗口回答，上下文是同一份'
@@ -805,6 +815,7 @@
     if (busy) return;
     fetch('/api/state').then((r) => r.json()).then((s) => {
       showMode(s);
+      showBack(s.codeSession);
       if (busy || !s.sessionId || s.busy || s.sessionId === sessionId || s.sessionId === syncTried) return;
       syncTried = s.sessionId;
       loadSession(s.sessionId, false);
