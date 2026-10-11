@@ -36,6 +36,20 @@ function projectDir() {
   return path.join(CONFIG_DIR, 'projects', AGENT_CWD.replace(/[^a-zA-Z0-9]/g, '-'));
 }
 
+// 会话属于哪个项目由它自己决定，不一定是画板服务的工作目录。
+// 在当前项目目录里找，找不到再翻所有项目目录（历史里能打开别的项目的会话，包括正在进行的 Code 会话）。
+const PROJECTS_ROOT = path.join(CONFIG_DIR, 'projects');
+function allProjectDirs() {
+  if (process.env.CLAUDE_PROJECT_DIR) return [projectDir()];   // 手动指定目录时只看这一个
+  const own = projectDir(), out = [own];
+  try { for (const d of fs.readdirSync(PROJECTS_ROOT)) { const p = path.join(PROJECTS_ROOT, d); if (p !== own) out.push(p); } } catch {}
+  return out;
+}
+function sessionFile(id) {
+  for (const d of allProjectDirs()) { const f = path.join(d, id + '.jsonl'); if (fs.existsSync(f)) return f; }
+  return null;
+}
+
 const SESSION_ID_RE = /^[A-Za-z0-9-]{8,64}$/;
 const DEFAULT_SKETCH_ASK = '请读取并解读下面这张草图，说明你看到了什么，再给出下一步建议。';
 const SKETCH_BLOCK_RE = /\n?\[用户随消息附了一张手绘草图[^\]]*\]\n图片路径: (\S+)(?:\n笔画数据[^\n]*)?/;
@@ -90,7 +104,7 @@ function scanTitle(file, st) {
   const key = st.mtimeMs + ':' + st.size;
   const hit = titleCache.get(file);
   if (hit && hit.key === key) return hit.result;
-  let result = { title: null, partial: false };
+  let result = { title: null, partial: false, cwd: null };
   let fd;
   try {
     fd = fs.openSync(file, 'r');
@@ -110,6 +124,7 @@ function scanTitle(file, st) {
   function scanLine(lineBuf) {
     if (!lineBuf.length || lineBuf.indexOf('"type":"user"') < 0) return false; // 大多数行不是用户消息，不必解析
     let e; try { e = JSON.parse(lineBuf.toString('utf8')); } catch { return false; }
+    if (e.cwd && !result.cwd) result.cwd = e.cwd;   // 会话自己记录的工作目录
     const raw = userEntryText(e);
     if (raw == null) return false;
     const p = parseUserText(raw);
@@ -127,36 +142,48 @@ function scanTitle(file, st) {
 let codeSession = null;
 
 function listSessions(limit = 60) {
-  const dir = projectDir();
-  let names;
-  try { names = fs.readdirSync(dir).filter((n) => n.endsWith('.jsonl')); }
-  catch { names = []; }
   const items = [];
-  for (const n of names) {
-    try {
-      const st = fs.statSync(path.join(dir, n));
-      items.push({ id: n.slice(0, -6), mtime: st.mtimeMs, size: st.size, st });
-    } catch {}
+  for (const d of allProjectDirs()) {
+    let names;
+    try { names = fs.readdirSync(d).filter((n) => n.endsWith('.jsonl')); } catch { continue; }
+    for (const n of names) {
+      try {
+        const file = path.join(d, n), st = fs.statSync(file);
+        items.push({ id: n.slice(0, -6), file, dirName: path.basename(d), mtime: st.mtimeMs, size: st.size, st });
+      } catch {}
+    }
   }
   items.sort((a, b) => b.mtime - a.mtime);
   const pinned = new Set([codeSession, sessionId].filter(Boolean));
   const sessions = [];
   for (const it of items) {
     if (sessions.length >= limit && !pinned.has(it.id)) continue;
-    const { title, partial } = scanTitle(path.join(dir, it.id + '.jsonl'), it.st);
+    const { title, partial, cwd } = scanTitle(it.file, it.st);
     const isCode = it.id === codeSession, isCur = it.id === sessionId;
     let t = title;
     if (t == null && (partial || pinned.has(it.id))) t = isCode ? '（当前 Code 会话，还没有内容）' : partial ? '（较长的会话，标题未读取）' : '（还没有内容的会话）';
     if (t == null) continue;               // 扫完整个文件确认没有用户消息：空会话，不列出
-    sessions.push({ id: it.id, mtime: it.mtime, size: it.size, title: t, code: isCode, current: isCur });
+    sessions.push({ id: it.id, mtime: it.mtime, size: it.size, title: t, cwd: cwd || null, code: isCode, current: isCur });
   }
   for (const id of pinned) { // 文件还没写盘的会话：补一条占位，保证能点回去
     if (sessions.some((x) => x.id === id)) continue;
-    sessions.unshift({ id, mtime: Date.now(), size: 0, title: id === codeSession ? '（当前 Code 会话，还没有内容）' : '（还没有内容的会话）', code: id === codeSession, current: id === sessionId });
+    sessions.unshift({ id, mtime: Date.now(), size: 0, cwd: AGENT_CWD, title: id === codeSession ? '（当前 Code 会话，还没有内容）' : '（还没有内容的会话）', code: id === codeSession, current: id === sessionId });
   }
   // Code 会话固定排第一，其余按修改时间
   sessions.sort((a, b) => (b.code - a.code) || (b.mtime - a.mtime));
-  return { dir, sessions: sessions.slice(0, limit + pinned.size), missing: !names.length && !pinned.size };
+  return { dir: PROJECTS_ROOT, cwd: AGENT_CWD, sessions: sessions.slice(0, limit + pinned.size), missing: !items.length && !pinned.size };
+}
+
+// 会话该在哪个目录下续接：`claude --resume` 只认「当前目录对应项目」里的会话，所以要用会话自己的 cwd
+function sessionCwd(id) {
+  const f = id && sessionFile(id);
+  if (f) {
+    try {
+      const c = scanTitle(f, fs.statSync(f)).cwd;
+      if (c && fs.statSync(c).isDirectory()) return c;
+    } catch {}
+  }
+  return AGENT_CWD;
 }
 
 // 一条 jsonl 记录 → 要显示的消息（0 条或多条）
@@ -216,7 +243,9 @@ function pushMerged(messages, m) {
 
 // 返回 { messages, size }：size 是已解析到的字节位置（只算到最后一个完整行），实时跟随从这里接着读
 function loadSession(id) {
-  const buf = fs.readFileSync(path.join(projectDir(), id + '.jsonl'));
+  const file = sessionFile(id);
+  if (!file) throw new Error('会话文件不存在');
+  const buf = fs.readFileSync(file);
   const size = buf.lastIndexOf(10) + 1;
   const messages = [];
   for (const line of buf.slice(0, size).toString('utf8').split('\n')) {
@@ -233,7 +262,7 @@ function loadSession(id) {
 function handleTail(req, res, url) {
   const id = url.searchParams.get('session') || '';
   if (!SESSION_ID_RE.test(id)) { res.writeHead(400); res.end('bad id'); return; }
-  const file = path.join(projectDir(), id + '.jsonl');
+  const fileNow = () => sessionFile(id) || path.join(projectDir(), id + '.jsonl'); // 会话文件可能在别的项目目录，也可能还没写盘
   const fromQ = url.searchParams.get('from');
   let pos = fromQ == null || fromQ === '' ? null : Math.max(0, Number(fromQ) || 0);
 
@@ -247,6 +276,7 @@ function handleTail(req, res, url) {
   let reading = false;
   const poll = () => {
     if (reading) return;
+    const file = fileNow();
     let size;
     try { size = fs.statSync(file).size; } catch { return; } // 文件还没写盘：等它出现，出现后从头读
     if (pos == null) { pos = 0; }
@@ -274,14 +304,14 @@ function handleTail(req, res, url) {
     });
   };
   // 没给 from：只看连接之后新增的内容
-  if (pos == null) { try { pos = fs.statSync(file).size; } catch { /* 文件还没出现，poll 里从头读 */ } }
+  if (pos == null) { try { pos = fs.statSync(fileNow()).size; } catch { /* 文件还没出现，poll 里从头读 */ } }
   const timer = setInterval(poll, 500);
   const beat = setInterval(() => res.write(': ping\n\n'), 15000);
   res.on('close', () => { clearInterval(timer); clearInterval(beat); });
 }
 
 let sessionId = null; // 当前对话的 session，复用即多轮
-const sessionFileExists = (id) => fs.existsSync(path.join(projectDir(), id + '.jsonl'));
+const sessionFileExists = (id) => !!sessionFile(id);
 // 启动时指定要接续的会话（插件把当前 Claude Code 会话 ID 传进来）。
 // 在 Code 里刚执行 /sketch-agent:start 时，这一轮还没结束，会话文件往往还没写盘，
 // 所以不能要求文件已存在：先接上，真正发送时再检查。
@@ -476,7 +506,7 @@ function runAgent(res, prompt) {
 
   let child;
   try {
-    child = spawn(CLAUDE_BIN, args, { stdio: ['ignore', 'pipe', 'pipe'], cwd: AGENT_CWD, env: childEnv() });
+    child = spawn(CLAUDE_BIN, args, { stdio: ['ignore', 'pipe', 'pipe'], cwd: sessionCwd(sessionId), env: childEnv() });
   } catch (e) {
     busy = false;
     sse(res, 'error', { message: `无法启动 ${CLAUDE_BIN}: ${e.message}` });

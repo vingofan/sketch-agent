@@ -83,6 +83,7 @@
   .hitem { display: block; width: 100%; text-align: left; padding: 9px 10px; border-radius: 10px; border: 1px solid transparent; margin-bottom: 4px; }
   .hitem:hover { background: var(--bg); border-color: var(--line); }
   .hitem.cur { border-color: var(--accent); }
+  .hitem .tag.pj { background: #eeebe3; color: #6b675c; }
   .hitem .tag { display: inline-block; margin-left: 4px; padding: 0 7px; border-radius: 999px; background: #e3f0e4; color: #2f6b3a; font-size: 11px; }
   .hitem .t { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .hitem .m { color: var(--muted); font-size: 12px; margin-top: 2px; }
@@ -633,6 +634,9 @@
         const t = document.createElement('div'); t.className = 't'; t.textContent = s.title;
         const m = document.createElement('div'); m.className = 'm';
         m.textContent = (s.size ? fmtTime(s.mtime) + ' · ' : '') + s.id.slice(0, 8);
+        if (s.cwd && d.cwd && s.cwd !== d.cwd) { // 别的项目里的会话：标出是哪个项目
+          const pj = document.createElement('span'); pj.className = 'tag pj'; pj.textContent = s.cwd.split(/[\\/]/).filter(Boolean).pop(); pj.title = s.cwd; m.append(' ', pj);
+        }
         if (s.code) { const tag = document.createElement('span'); tag.className = 'tag'; tag.textContent = '正在进行的 Code 会话'; m.append(' ', tag); }
         b.append(t, m);
         b.onclick = () => loadSession(s.id);
