@@ -78,51 +78,85 @@ function userEntryText(e) {
   return isNoise(t) ? null : t;
 }
 
-function readHead(file, bytes = 256 * 1024) {
-  const fd = fs.openSync(file, 'r');
+// 取会话标题：第一条真实用户消息。
+// 不能只读文件开头：长会话开头常有几百 KB 的快照/带图的首条消息，只读前 256KB 会误判成「空会话」把它藏起来。
+// 所以按块流式往下找，每个文件最多扫 TITLE_SCAN_MAX，并按 (mtime,size) 缓存。
+const TITLE_SCAN_MAX = 48 * 1024 * 1024;
+const titleCache = new Map(); // file -> { key, result }
+
+// 返回 { title, partial }：title 为 null 且 partial=false 表示扫完整个文件确认没有用户消息（空会话）；
+// partial=true 表示还没扫完就到上限了，不能断定是空会话。
+function scanTitle(file, st) {
+  const key = st.mtimeMs + ':' + st.size;
+  const hit = titleCache.get(file);
+  if (hit && hit.key === key) return hit.result;
+  let result = { title: null, partial: false };
+  let fd;
   try {
-    const buf = Buffer.alloc(bytes);
-    const n = fs.readSync(fd, buf, 0, bytes, 0);
-    return buf.slice(0, n).toString('utf8');
-  } finally { fs.closeSync(fd); }
+    fd = fs.openSync(file, 'r');
+    const chunk = Buffer.alloc(1024 * 1024);
+    let pos = 0, carry = Buffer.alloc(0), done = false;
+    while (!done && pos < TITLE_SCAN_MAX) {
+      const n = fs.readSync(fd, chunk, 0, chunk.length, pos);
+      if (n <= 0) { if (carry.length) done = scanLine(carry); break; }
+      pos += n;
+      let buf = Buffer.concat([carry, chunk.subarray(0, n)]);
+      let i;
+      while (!done && (i = buf.indexOf(10)) >= 0) { done = scanLine(buf.subarray(0, i)); buf = buf.subarray(i + 1); }
+      carry = buf;
+    }
+    if (result.title == null && pos >= TITLE_SCAN_MAX) result.partial = true;
+  } catch { /* 读不了就当没有标题 */ } finally { if (fd != null) try { fs.closeSync(fd); } catch {} }
+  function scanLine(lineBuf) {
+    if (!lineBuf.length || lineBuf.indexOf('"type":"user"') < 0) return false; // 大多数行不是用户消息，不必解析
+    let e; try { e = JSON.parse(lineBuf.toString('utf8')); } catch { return false; }
+    const raw = userEntryText(e);
+    if (raw == null) return false;
+    const p = parseUserText(raw);
+    const t = (p.text || (p.sketch ? '[草图]' : '')).replace(/\s+/g, ' ').trim();
+    if (!t) return false;
+    result.title = t.length > 60 ? t.slice(0, 60) + '…' : t;
+    return true;
+  }
+  titleCache.set(file, { key, result });
+  return result;
 }
 
-function sessionTitle(file) {
-  let head;
-  try { head = readHead(file); } catch { return null; }
-  for (const line of head.split('\n')) {
-    if (!line.trim()) continue;
-    let e; try { e = JSON.parse(line); } catch { continue; }
-    const raw = userEntryText(e);
-    if (raw == null) continue;
-    const p = parseUserText(raw);
-    const title = (p.text || (p.sketch ? '[草图]' : '')).replace(/\s+/g, ' ').trim();
-    if (title) return title.length > 60 ? title.slice(0, 60) + '…' : title;
-  }
-  return null; // 空会话，不列出
-}
+// codeSession：启动器接续的那个 Code 会话（正在进行中的对话）。无论它有没有标题、文件写没写盘，历史里都要有，
+// 否则用户点进别的会话之后就回不去了。
+let codeSession = null;
 
 function listSessions(limit = 60) {
   const dir = projectDir();
   let names;
   try { names = fs.readdirSync(dir).filter((n) => n.endsWith('.jsonl')); }
-  catch { return { dir, sessions: [], missing: true }; }
+  catch { names = []; }
   const items = [];
   for (const n of names) {
     try {
       const st = fs.statSync(path.join(dir, n));
-      items.push({ id: n.slice(0, -6), mtime: st.mtimeMs, size: st.size });
+      items.push({ id: n.slice(0, -6), mtime: st.mtimeMs, size: st.size, st });
     } catch {}
   }
   items.sort((a, b) => b.mtime - a.mtime);
+  const pinned = new Set([codeSession, sessionId].filter(Boolean));
   const sessions = [];
-  for (const it of items.slice(0, limit * 2)) {
-    const title = sessionTitle(path.join(dir, it.id + '.jsonl'));
-    if (title == null) continue;
-    sessions.push({ ...it, title });
-    if (sessions.length >= limit) break;
+  for (const it of items) {
+    if (sessions.length >= limit && !pinned.has(it.id)) continue;
+    const { title, partial } = scanTitle(path.join(dir, it.id + '.jsonl'), it.st);
+    const isCode = it.id === codeSession, isCur = it.id === sessionId;
+    let t = title;
+    if (t == null && (partial || pinned.has(it.id))) t = isCode ? '（当前 Code 会话，还没有内容）' : partial ? '（较长的会话，标题未读取）' : '（还没有内容的会话）';
+    if (t == null) continue;               // 扫完整个文件确认没有用户消息：空会话，不列出
+    sessions.push({ id: it.id, mtime: it.mtime, size: it.size, title: t, code: isCode, current: isCur });
   }
-  return { dir, sessions };
+  for (const id of pinned) { // 文件还没写盘的会话：补一条占位，保证能点回去
+    if (sessions.some((x) => x.id === id)) continue;
+    sessions.unshift({ id, mtime: Date.now(), size: 0, title: id === codeSession ? '（当前 Code 会话，还没有内容）' : '（还没有内容的会话）', code: id === codeSession, current: id === sessionId });
+  }
+  // Code 会话固定排第一，其余按修改时间
+  sessions.sort((a, b) => (b.code - a.code) || (b.mtime - a.mtime));
+  return { dir, sessions: sessions.slice(0, limit + pinned.size), missing: !names.length && !pinned.size };
 }
 
 // 一条 jsonl 记录 → 要显示的消息（0 条或多条）
@@ -186,7 +220,7 @@ function loadSession(id) {
   const size = buf.lastIndexOf(10) + 1;
   const messages = [];
   for (const line of buf.slice(0, size).toString('utf8').split('\n')) {
-    if (!line.trim()) continue;
+    if (!line.includes('"type":"user"') && !line.includes('"type":"assistant"')) continue; // 其余行（附件、快照等）不必解析
     let e; try { e = JSON.parse(line); } catch { continue; }
     for (const m of entryMessages(e)) pushMerged(messages, m);
   }
@@ -254,7 +288,7 @@ const sessionFileExists = (id) => fs.existsSync(path.join(projectDir(), id + '.j
 {
   const want = process.env.ATTACH_SESSION || '';
   if (want) {
-    if (SESSION_ID_RE.test(want)) sessionId = want;
+    if (SESSION_ID_RE.test(want)) { sessionId = want; codeSession = want; }
     else console.error('ATTACH_SESSION 格式无效，忽略：' + want);
   }
 }
@@ -578,7 +612,7 @@ const server = http.createServer((req, res) => {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ id, messages, size }));
     } catch {
-      if (id === sessionId) { // 已接上但还没写盘的会话：当作空会话
+      if (id === sessionId || id === codeSession) { // 已接上/Code 正在进行但还没写盘的会话：当作空会话
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ id, messages: [], size: 0, pending: true }));
       } else { res.writeHead(404); res.end('会话文件不存在'); }
@@ -593,6 +627,7 @@ const server = http.createServer((req, res) => {
       // pending：启动器接续「正在执行 start 的这一轮」，文件稍后才会写盘
       if (!pending && !sessionFileExists(id)) { res.writeHead(404); res.end('会话文件不存在'); return; }
       sessionId = id;
+      if (pending) codeSession = id; // 启动器传来的是「正在执行 start 的这个 Code 会话」
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ ok: true, sessionId }));
     }).catch((e) => { res.writeHead(500); res.end(String(e.message || e)); });
